@@ -15,6 +15,10 @@ dependencies = [
     "thefuzz>=0.22",
     "python-levenshtein>=0.25",
     "aiohttp-socks>=0.11.0",
+    # Telethon импортирует именно этот модуль (`import socks`) для SOCKS-прокси.
+    # Без него proxy_tuple() в parser/client.py падает с ModuleNotFoundError,
+    # и поток «Добавить аккаунт» молча умирает на этапе request_code.
+    "pysocks>=1.7",
 ]
 
 [tool.uv]

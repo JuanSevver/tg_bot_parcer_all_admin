@@ -74,7 +74,19 @@ async def cb_acc_add(callback: CallbackQuery, state: FSMContext, session: AsyncS
 
 @router.message(UserAccountSG.add_phone)
 async def process_phone(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    phone = (message.text or "").strip()
+    # Нормализуем: убираем пробелы и дефисы, гарантируем ведущий «+».
+    raw = (message.text or "").strip().replace(" ", "").replace("-", "")
+    if raw and not raw.startswith("+"):
+        raw = "+" + raw
+    phone = raw
+    if len(phone) < 8 or not phone[1:].isdigit():
+        await message.answer(
+            "❌ Похоже, номер указан неверно. Формат: <code>+79001234567</code>",
+            reply_markup=cancel_kb("u:accounts"),
+            parse_mode="HTML",
+        )
+        return
+
     data = await state.get_data()
     proxy_id = data.get("proxy_id")
     proxy_obj = await session.get(Proxy, proxy_id) if proxy_id else None
@@ -82,11 +94,25 @@ async def process_phone(message: Message, state: FSMContext, session: AsyncSessi
         await state.clear()
         await message.answer("❌ Прокси недоступен.", reply_markup=cancel_kb("u:accounts"))
         return
-    px = proxy_tuple(
-        proxy_obj.host, proxy_obj.port, proxy_obj.type,
-        proxy_obj.username, proxy_obj.password,
-    )
+
+    try:
+        px = proxy_tuple(
+            proxy_obj.host, proxy_obj.port, proxy_obj.type,
+            proxy_obj.username, proxy_obj.password,
+        )
+    except Exception as e:
+        logger.exception("proxy_tuple failed")
+        await message.answer(
+            f"❌ Ошибка обработки прокси: {type(e).__name__}.\n"
+            "Проверьте корректность данных прокси.",
+            reply_markup=cancel_kb("u:accounts"),
+        )
+        return
+
     await state.update_data(phone=phone)
+    # Сообщаем юзеру что идёт работа — request_code может занять 5-30 сек
+    # при медленном прокси, и без этого человеку кажется что бот завис.
+    await message.answer("⏳ Подключаюсь через прокси и запрашиваю код...")
     try:
         code_hash = await parser_manager.request_code(phone, proxy=px)
         await state.update_data(phone_code_hash=code_hash)
@@ -100,8 +126,14 @@ async def process_phone(message: Message, state: FSMContext, session: AsyncSessi
         await state.clear()
         logger.exception("user request_code failed")
         await message.answer(
-            f"❌ Ошибка отправки кода: {type(e).__name__}",
+            f"❌ Ошибка отправки кода: <code>{type(e).__name__}</code>\n"
+            f"<i>{str(e)[:200]}</i>\n\n"
+            "Возможные причины:\n"
+            "• Прокси не работает или заблокирован Telegram\n"
+            "• Неверный формат номера\n"
+            "• Telegram временно блокирует IP",
             reply_markup=cancel_kb("u:accounts"),
+            parse_mode="HTML",
         )
 
 

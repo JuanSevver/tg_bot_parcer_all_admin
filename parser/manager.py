@@ -550,8 +550,20 @@ class ParserManager:
         await _evict_expired_pending()
         from config import load_config
         cfg = load_config()
-        client = TelegramClient(StringSession(), cfg.tg_api_id, cfg.tg_api_hash, proxy=proxy)
-        await client.connect()
+        client = TelegramClient(
+            StringSession(), cfg.tg_api_id, cfg.tg_api_hash, proxy=proxy,
+            # Дефолтный timeout у telethon 10с — но с битым прокси connect()
+            # может зависать до 30+. Жёсткая защита через asyncio.wait_for ниже.
+            timeout=15,
+        )
+        try:
+            await asyncio.wait_for(client.connect(), timeout=20)
+        except asyncio.TimeoutError:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise RuntimeError("Прокси не отвечает (timeout)")
         result = await client.send_code_request(phone)
         _pending[phone] = (client, result.phone_code_hash, datetime.utcnow())
         return result.phone_code_hash
