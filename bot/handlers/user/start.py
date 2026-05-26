@@ -88,7 +88,8 @@ async def _get_or_create_user(session: AsyncSession, tg_user) -> User:
         select(User).where(User.id == tg_user.id).options(selectinload(User.subscription))
     )
     user = result.scalar_one_or_none()
-    if not user:
+    is_new = user is None
+    if is_new:
         user = User(
             id=tg_user.id,
             username=tg_user.username,
@@ -97,8 +98,14 @@ async def _get_or_create_user(session: AsyncSession, tg_user) -> User:
         )
         session.add(user)
         await session.flush()
-    # Auto trial on first /start
-    if not user.trial_used and not user.subscription:
+        has_sub = False
+    else:
+        # selectinload загрузил subscription заранее — обращение к нему безопасно
+        # в async. Для НОВОГО пользователя relationship не была eager-loaded,
+        # и lazy-load в async-сессии падает MissingGreenlet'ом.
+        has_sub = user.subscription is not None
+
+    if not user.trial_used and not has_sub:
         sub = Subscription(
             user_id=user.id,
             plan="trial",
@@ -108,8 +115,12 @@ async def _get_or_create_user(session: AsyncSession, tg_user) -> User:
         session.add(sub)
         user.trial_used = True
     await session.commit()
-    await session.refresh(user, ["subscription"])
-    return user
+    # Перезагружаем subscription явным запросом — refresh с attribute names
+    # тоже может вызвать lazy-load для свежесозданного объекта.
+    result = await session.execute(
+        select(User).where(User.id == user.id).options(selectinload(User.subscription))
+    )
+    return result.scalar_one()
 
 
 @router.message(CommandStart())
