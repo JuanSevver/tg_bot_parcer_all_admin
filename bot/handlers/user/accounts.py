@@ -223,6 +223,7 @@ async def cb_acc_toggle_joined(callback: CallbackQuery, session: AsyncSession) -
         await parser_manager.reload_clients()
     except Exception:
         pass
+    # cb_acc_detail сам ответит на callback.
     await cb_acc_detail(callback, session)
 
 
@@ -260,5 +261,7 @@ async def cb_acc_delete(callback: CallbackQuery, state: FSMContext, session: Asy
         except Exception:
             pass
         await callback.answer("Удалено.", show_alert=False)
+    else:
+        await callback.answer()
     await state.set_state(UserAccountSG.list)
     await _show_list(callback, session, callback.from_user.id)

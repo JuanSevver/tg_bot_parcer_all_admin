@@ -105,6 +105,8 @@ async def cb_proxy_delete(callback: CallbackQuery, session: AsyncSession) -> Non
         await session.delete(p)
         await session.commit()
         await callback.answer("Удалено.", show_alert=False)
+    else:
+        await callback.answer()
     await _show_list(callback, session, callback.from_user.id)
 
 

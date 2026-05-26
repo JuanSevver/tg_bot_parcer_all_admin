@@ -139,6 +139,7 @@ async def cb_cat_toggle(callback: CallbackQuery, state: FSMContext, session: Asy
     cat.is_active = not cat.is_active
     await session.commit()
     await _show_detail(callback, state, cat)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("u:cat:addkw:"))
@@ -291,6 +292,8 @@ async def cb_cat_delete(callback: CallbackQuery, state: FSMContext, session: Asy
         await session.delete(cat)
         await session.commit()
         await callback.answer("✅ Категория удалена.", show_alert=True)
+    else:
+        await callback.answer()
     await state.set_state(UserCategorySG.list)
     await _show_list(callback, session, callback.from_user.id)
 
@@ -354,8 +357,7 @@ async def cb_cat_acc_toggle(callback: CallbackQuery, session: AsyncSession) -> N
     else:
         session.add(CategoryAccount(category_id=cat_id, account_id=acc_id))
     await session.commit()
-    await callback.answer()
-    # Refresh accounts page
+    # Перерисовываем страницу — она же закроет query.
     await cb_cat_accounts(callback, session)
 
 

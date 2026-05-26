@@ -12,7 +12,7 @@ from aiogram.types import ErrorEvent
 
 from config import load_config
 from database import init_db
-from bot.middlewares import DatabaseMiddleware, ActivityMiddleware, AutoAnswerMiddleware
+from bot.middlewares import DatabaseMiddleware, ActivityMiddleware
 from bot.handlers.user import user_router
 from bot.handlers.admin import admin_router
 from parser.manager import parser_manager
@@ -60,7 +60,11 @@ async def main() -> None:
     dp.message.middleware(activity)
     dp.callback_query.middleware(activity)
     dp.inline_query.middleware(activity)
-    dp.callback_query.middleware(AutoAnswerMiddleware())
+    # AutoAnswerMiddleware намеренно выключен: он pre-answer-ит callback до
+    # запуска handler-а, из-за чего callback.answer(text, show_alert=True)
+    # потом не показывает алерт (query уже закрыт). Если хендлеры начнут
+    # пробивать 10-секундный deadline Telegram — вернём, но текст алертов
+    # надо будет переделать на message.answer().
 
     dp.include_router(admin_router)
     dp.include_router(user_router)

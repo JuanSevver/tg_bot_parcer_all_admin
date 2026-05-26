@@ -216,6 +216,11 @@ class ParserManager:
         # Заполняется при первом удачном get_entity и переиспользуется,
         # вместо слепого round-robin (который попадает мимо для приватных групп).
         self._group_owner: dict[int, int] = {}
+        # Карта parser_account.id → users.id (владелец аккаунта).
+        # Нужна для изоляции: матчинг сообщения должен сравниваться ТОЛЬКО
+        # с категориями владельца аккаунта, через который пришло сообщение.
+        # Иначе юзер A получает сообщения, найденные через аккаунты юзера B.
+        self._acc_owner: dict[int, int] = {}
         # Изменяемые наборы для realtime-фильтра. Хендлеры читают их по ссылке,
         # поэтому достаточно обновлять содержимое — повторно регистрировать
         # обработчики не нужно. Пополняются при старте и после каждого полла,
@@ -352,6 +357,7 @@ class ParserManager:
             self._client_pairs.clear()
             self._joined_pairs.clear()
             self._group_owner.clear()
+            self._acc_owner.clear()
 
             async with async_session() as session:
                 result = await session.execute(
@@ -376,6 +382,7 @@ class ParserManager:
                     if not await client.is_user_authorized():
                         raise AuthKeyUnregisteredError(request=None)
                     self._client_pairs.append((client, acc.id))
+                    self._acc_owner[acc.id] = acc.owner_id
                     if acc.parse_joined_groups:
                         self._joined_pairs.append((client, acc.id))
                     self._install_disconnect_hook(client, acc.id)
@@ -1039,9 +1046,15 @@ class ParserManager:
         text_lower = text.lower()
         text_h = _text_hash(text)
 
-        # 1. Дедупликация по (group_id, message_id) — одно и то же сообщение не обрабатываем дважды
+        # 1. Дедупликация по (owner_id, group_id, message_id) — одно и то же
+        # сообщение не обрабатываем дважды ДЛЯ ОДНОГО ВЛАДЕЛЬЦА. Разные юзеры
+        # могут парсить одну и ту же группу — каждый получает свой матч.
+        acc_owner_id = self._acc_owner.get(acc_id)
+        if acc_owner_id is None:
+            return
         check = await session.execute(
             select(ParsedMessage.id).where(
+                ParsedMessage.owner_id == acc_owner_id,
                 ParsedMessage.group_id == message.chat_id,
                 ParsedMessage.message_id == message.id,
             )
@@ -1064,8 +1077,11 @@ class ParserManager:
         # text_hash (md5) с composite-index'ом и WHERE parsed_at > NOW()-window.
         if author_id and text:
             window_start = datetime.utcnow() - DEDUP_WINDOW
+            # Окно дедупа тоже per-owner — иначе спам от одного автора заглушит
+            # уведомления юзеров с разными ключевыми словами.
             author_dup = await session.execute(
                 select(ParsedMessage.id).where(
+                    ParsedMessage.owner_id == acc_owner_id,
                     ParsedMessage.author_id == author_id,
                     ParsedMessage.text_hash == text_h,
                     ParsedMessage.parsed_at > window_start,
@@ -1074,10 +1090,13 @@ class ParserManager:
             if author_dup.scalar_one_or_none():
                 return
 
-        # 4. Фильтрация категорий по аккаунту
+        # 4. Фильтрация категорий по аккаунту И по владельцу.
+        # Изоляция между юзерами: сообщение, пришедшее через аккаунт юзера A,
+        # матчится ТОЛЬКО с категориями юзера A. acc_owner_id уже посчитан выше.
         applicable = [
             cat for cat in categories
-            if not cat_acc_map.get(cat.id) or acc_id in cat_acc_map[cat.id]
+            if cat.owner_id == acc_owner_id
+            and (not cat_acc_map.get(cat.id) or acc_id in cat_acc_map[cat.id])
         ]
 
         matched_cat = None

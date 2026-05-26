@@ -132,6 +132,7 @@ async def cb_grp_toggle(callback: CallbackQuery, session: AsyncSession) -> None:
         return
     g.is_active = not g.is_active
     await session.commit()
+    # cb_grp_detail сам ответит на callback.
     await cb_grp_detail(callback, session)
 
 
@@ -143,6 +144,8 @@ async def cb_grp_delete(callback: CallbackQuery, state: FSMContext, session: Asy
         await session.delete(g)
         await session.commit()
         await callback.answer("Группа удалена.", show_alert=False)
+    else:
+        await callback.answer()
     await state.set_state(UserGroupSG.list)
     await _show_list(callback, session, callback.from_user.id)
 
@@ -200,5 +203,4 @@ async def cb_grp_cat_toggle(callback: CallbackQuery, session: AsyncSession) -> N
     else:
         session.add(GroupCategory(group_id=gid, category_id=cat_id))
     await session.commit()
-    await callback.answer()
     await cb_grp_cats(callback, session)
