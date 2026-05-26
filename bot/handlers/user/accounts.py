@@ -144,10 +144,15 @@ async def process_code(message: Message, state: FSMContext, session: AsyncSessio
     phone = data["phone"]
     phone_code_hash = data.get("phone_code_hash")
     proxy_id = data.get("proxy_id")
+    reissue_acc_id = data.get("reissue_acc_id")
     try:
         session_string = await parser_manager.sign_in(phone, code, phone_code_hash)
-        await _save_account(session, message.from_user.id, phone, session_string, proxy_id)
-        await message.answer("✅ Аккаунт успешно добавлен!")
+        if reissue_acc_id:
+            await _update_account_session(session, message.from_user.id, reissue_acc_id, session_string, phone)
+            await message.answer("✅ Сессия перевыдана. История и привязки сохранены.")
+        else:
+            await _save_account(session, message.from_user.id, phone, session_string, proxy_id)
+            await message.answer("✅ Аккаунт успешно добавлен!")
         await state.set_state(UserAccountSG.list)
         await _show_list(message, session, message.from_user.id)
     except Exception as e:
@@ -173,10 +178,15 @@ async def process_2fa(message: Message, state: FSMContext, session: AsyncSession
     data = await state.get_data()
     phone = data["phone"]
     proxy_id = data.get("proxy_id")
+    reissue_acc_id = data.get("reissue_acc_id")
     try:
         session_string = await parser_manager.sign_in_2fa(phone, password)
-        await _save_account(session, message.from_user.id, phone, session_string, proxy_id)
-        await message.answer("✅ Аккаунт добавлен (2FA).")
+        if reissue_acc_id:
+            await _update_account_session(session, message.from_user.id, reissue_acc_id, session_string, phone)
+            await message.answer("✅ Сессия перевыдана (2FA). История и привязки сохранены.")
+        else:
+            await _save_account(session, message.from_user.id, phone, session_string, proxy_id)
+            await message.answer("✅ Аккаунт добавлен (2FA).")
         await state.set_state(UserAccountSG.list)
         await _show_list(message, session, message.from_user.id)
     except Exception as e:
@@ -204,6 +214,28 @@ async def _save_account(
         await parser_manager.reload_clients()
     except Exception:
         logger.exception("reload_clients failed after add")
+
+
+async def _update_account_session(
+    session: AsyncSession, user_id: int, acc_id: int,
+    session_string: str, phone: str | None,
+) -> None:
+    """Перевыдача сессии для существующего аккаунта.
+    Проверяет принадлежность пользователю перед обновлением.
+    Сохраняет CategoryAccount-привязки и messages_parsed.
+    """
+    acc = await _get_user_acc(session, user_id, acc_id)
+    if not acc:
+        raise ValueError(f"Account {acc_id} not found or not owned by user {user_id}")
+    acc.session_string = session_string
+    if phone:
+        acc.phone = phone
+    acc.is_valid = True
+    await session.commit()
+    try:
+        await parser_manager.reload_clients()
+    except Exception:
+        logger.exception("reload_clients failed after reissue")
 
 
 async def _get_user_acc(session: AsyncSession, user_id: int, acc_id: int) -> ParserAccount | None:

@@ -175,16 +175,27 @@ async def cb_acc_by_session(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(AccountSG.add_session_string)
 async def process_session_string(message: Message, state: FSMContext, session: AsyncSession) -> None:
     ss = message.text.strip()
-    await _save_account(session, message.from_user.id, None, ss)
-    await message.answer("✅ Аккаунт добавлен по строке сессии!", reply_markup=cancel_kb("adm:accounts", "◀ К аккаунтам"))
-    await state.clear()
+    try:
+        await _save_account(session, message.from_user.id, None, ss)
+        await message.answer("✅ Аккаунт добавлен по строке сессии!", reply_markup=cancel_kb("adm:accounts", "◀ К аккаунтам"))
+    except Exception as e:
+        logger.exception("process_session_string failed")
+        await message.answer(
+            f"❌ Ошибка сохранения: {type(e).__name__}",
+            reply_markup=cancel_kb("adm:accounts"),
+        )
+    finally:
+        await state.clear()
 
 
 async def _save_account(session: AsyncSession, owner_id: int, phone: str | None, session_string: str) -> None:
     acc = ParserAccount(owner_id=owner_id, phone=phone, session_string=session_string)
     session.add(acc)
     await session.commit()
-    await parser_manager.reload_clients()
+    try:
+        await parser_manager.reload_clients()
+    except Exception:
+        logger.exception("reload_clients failed after admin add")
 
 
 @router.callback_query(F.data.startswith("adm:acc:detail:"))
