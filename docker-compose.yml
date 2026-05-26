@@ -1,0 +1,28 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+
+    # БД остаётся на хосте — bind-mount существующего файла.
+    # ВАЖНО: bot.db должен УЖЕ существовать на хосте перед `docker compose up`,
+    # иначе Docker создаст ДИРЕКТОРИЮ с этим именем и SQLite упадёт.
+    # Для первого деплоя: `touch bot.db && docker compose up -d`.
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/bot.db
+      OBSERVABILITY_PORT: "8080"
+
+    volumes:
+      - ./bot.db:/app/bot.db
+
+    # /healthz публикуем наружу — пробросьте порт если нужно мониторить извне.
+    # Внутри сети контейнера он используется HEALTHCHECK'ом из Dockerfile.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    # Логи: последние 50 МБ, не больше 5 файлов
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
