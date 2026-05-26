@@ -83,7 +83,8 @@ WELCOME_TEXT = (
 )
 
 
-async def _get_or_create_user(session: AsyncSession, tg_user) -> User:
+async def _get_or_create_user(session: AsyncSession, tg_user) -> tuple[User, bool]:
+    """Возвращает (user, is_new). is_new=True только при самом первом /start."""
     result = await session.execute(
         select(User).where(User.id == tg_user.id).options(selectinload(User.subscription))
     )
@@ -120,17 +121,18 @@ async def _get_or_create_user(session: AsyncSession, tg_user) -> User:
     result = await session.execute(
         select(User).where(User.id == user.id).options(selectinload(User.subscription))
     )
-    return result.scalar_one()
+    return result.scalar_one(), is_new
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    user = await _get_or_create_user(session, message.from_user)
+    user, is_new = await _get_or_create_user(session, message.from_user)
     if user.is_blocked:
         await message.answer("🚫 Ваш аккаунт заблокирован. Обратитесь в поддержку.")
         return
     await state.set_state(UserSG.main_menu)
-    await message.answer(WELCOME_TEXT, parse_mode="HTML")
+    if is_new:
+        await message.answer(WELCOME_TEXT, parse_mode="HTML")
     await message.answer(INSTRUCTION_TEXT, reply_markup=instruction_kb(), parse_mode="HTML")
     # Дашборд отрисует основное меню — отдельный модуль.
     from bot.handlers.user.dashboard import send_dashboard
