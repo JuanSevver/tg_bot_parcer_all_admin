@@ -96,7 +96,7 @@ async def main() -> None:
         logger.info("Shutdown signal received.")
         stop_event.set()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             loop.add_signal_handler(sig, _signal_handler)

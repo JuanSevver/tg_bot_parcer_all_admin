@@ -140,7 +140,7 @@ class _GlobalSendLimiter:
 
     async def acquire(self) -> None:
         async with self._lock:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             now = loop.time()
             # Глобальная пауза от RetryAfter — приоритетнее, чем токен-интервал.
             if self._paused_until > now:
@@ -154,7 +154,7 @@ class _GlobalSendLimiter:
 
     def pause(self, seconds: float) -> None:
         """Заявить глобальную паузу — все следующие acquire() будут её ждать."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         new_until = loop.time() + max(0.0, seconds)
         if new_until > self._paused_until:
             self._paused_until = new_until
@@ -194,7 +194,7 @@ def cancel_pending_signin(phone: str) -> None:
         return
     client, _, _ = record
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.create_task(client.disconnect())
     except Exception:
         pass
@@ -314,7 +314,7 @@ class ParserManager:
         AuthKeyDuplicated (Telethon роняет его из recv-loop, не из connect())
         и убрать мёртвый клиент из пула, иначе round-robin будет дёргать его."""
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _on_disconnect(_client):
             # Запускаем cleanup в loop — disconnect-хук может вызваться из любого треда.
@@ -845,16 +845,21 @@ class ParserManager:
             except Exception as e:
                 logger.error("Error scanning joined groups: %s", e)
 
-    async def _get_last_seen_message_id(self, session, chat_id: int) -> int:
+    async def _get_last_seen_message_id(self, session, chat_id: int, owner_id: int | None = None) -> int:
         """Возвращает максимальный message_id который уже обработан для данного чата.
+
+        owner_id должен быть передан, чтобы изолировать курсор по владельцу.
+        Без него, если два пользователя парсят одну и ту же группу, новый
+        пользователь получит max(message_id) другого и пропустит первые N сообщений.
 
         Возвращает 0 если группа обрабатывается впервые — тогда берём историю
         на глубину INITIAL_HISTORY_LIMIT сообщений.
         """
+        cond = [ParsedMessage.group_id == chat_id]
+        if owner_id is not None:
+            cond.append(ParsedMessage.owner_id == owner_id)
         result = await session.execute(
-            select(func.max(ParsedMessage.message_id)).where(
-                ParsedMessage.group_id == chat_id
-            )
+            select(func.max(ParsedMessage.message_id)).where(*cond)
         )
         return result.scalar_one_or_none() or 0
 
@@ -884,7 +889,8 @@ class ParserManager:
                 # Нормализованный peer id вида -100... — совпадает с message.chat_id
                 resolved_chat_id = get_peer_id(entity)
 
-                # Если в БД ещё нет chat_id или тип изменился — сохраняем
+                # Если в БД ещё нет chat_id или тип изменился — сохраняем.
+                # acc_owner_id уже получен выше для last_seen_id.
                 if group.chat_id != resolved_chat_id or group.is_channel != actually_channel:
                     db_grp = await session.get(TelegramGroup, group.id)
                     if db_grp:
@@ -911,8 +917,10 @@ class ParserManager:
                     except Exception:
                         pass
 
-                # last_seen_id ищем по тому же peer id, что хранится в ParsedMessage
-                last_seen_id = await self._get_last_seen_message_id(session, resolved_chat_id)
+                # last_seen_id ищем по тому же peer id, что хранится в ParsedMessage.
+                # Передаём owner_id чтобы не унаследовать курсор другого пользователя.
+                acc_owner_id = self._acc_owner.get(acc_id)
+                last_seen_id = await self._get_last_seen_message_id(session, resolved_chat_id, acc_owner_id)
 
                 if last_seen_id > 0:
                     # Инкрементальный режим: только новые сообщения после last_seen_id
@@ -937,7 +945,7 @@ class ParserManager:
                     comments_last_seen = 0
                     if discussion_chat_id:
                         comments_last_seen = await self._get_last_seen_message_id(
-                            session, discussion_chat_id
+                            session, discussion_chat_id, acc_owner_id
                         )
                     async for post in client.iter_messages(entity, limit=20):
                         if not (post.replies and post.replies.replies):
@@ -1012,7 +1020,8 @@ class ParserManager:
 
             try:
                 async with async_session() as session:
-                    last_seen_id = await self._get_last_seen_message_id(session, chat_id)
+                    joined_owner_id = self._acc_owner.get(acc_id)
+                    last_seen_id = await self._get_last_seen_message_id(session, chat_id, joined_owner_id)
                     if last_seen_id > 0:
                         iter_kwargs = {"min_id": last_seen_id, "limit": None}
                     else:

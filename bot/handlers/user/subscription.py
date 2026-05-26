@@ -67,9 +67,12 @@ async def cb_choose_plan(callback: CallbackQuery, state: FSMContext, session: As
         .options(selectinload(User.subscription))
     )
     user = result.scalar_one_or_none()
+    if not user:
+        await callback.answer("Пользователь не найден. Нажмите /start.", show_alert=True)
+        return
 
     if plan_id == "trial":
-        if user and user.trial_used:
+        if user.trial_used:
             await callback.answer("Пробный период уже использован.", show_alert=True)
             return
         await _grant_subscription(session, user, plan_id, plan["days"])
